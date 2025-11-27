@@ -1,0 +1,114 @@
+#Requires -Version 5.1
+#Requires -Modules ActiveDirectory
+<#
+.SYNOPSIS
+    Test connectivity and PowerShell remoting to target computers
+.DESCRIPTION
+    Validates that computers are online and PowerShell remoting is working before running cleanup
+#>
+
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$TargetOU,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$OutputPath = "C:\Scripts\Logs"
+)
+
+function Test-BulkConnectivity {
+    param([string]$OU)
+    
+    Write-Host "`nTesting Connectivity for OU: $OU`n" -ForegroundColor Cyan
+    
+    try {
+        $computers = Get-ADComputer -Filter * -SearchBase $OU -Properties Name
+        $totalCount = $computers.Count
+        Write-Host "Found $totalCount computers to test`n"
+        
+        $results = @()
+        $currentCount = 0
+        
+        foreach ($computer in $computers) {
+            $currentCount++
+            Write-Progress -Activity "Testing Connectivity" `
+                -Status "Testing $($computer.Name) ($currentCount of $totalCount)" `
+                -PercentComplete (($currentCount / $totalCount) * 100)
+            
+            $result = [PSCustomObject]@{
+                ComputerName = $computer.Name
+                PingTest = 'Failed'
+                PSRemoting = 'Failed'
+                WinRMPort = 'Closed'
+                Error = $null
+            }
+            
+            # Test Ping
+            if (Test-Connection -ComputerName $computer.Name -Count 1 -Quiet) {
+                $result.PingTest = 'Success'
+                
+                # Test WinRM Port
+                $portTest = Test-NetConnection -ComputerName $computer.Name -Port 5985 -WarningAction SilentlyContinue
+                if ($portTest.TcpTestSucceeded) {
+                    $result.WinRMPort = 'Open'
+                    
+                    # Test PS Remoting
+                    try {
+                        $session = New-PSSession -ComputerName $computer.Name -ErrorAction Stop
+                        $result.PSRemoting = 'Success'
+                        Remove-PSSession -Session $session
+                    }
+                    catch {
+                        $result.Error = $_.Exception.Message
+                    }
+                }
+            }
+            
+            $results += $result
+        }
+        
+        Write-Progress -Activity "Testing Connectivity" -Completed
+        
+        # Summary
+        Write-Host "`n========================================" -ForegroundColor Green
+        Write-Host "CONNECTIVITY TEST RESULTS" -ForegroundColor Green
+        Write-Host "========================================`n" -ForegroundColor Green
+        
+        $online = ($results | Where-Object { $_.PingTest -eq 'Success' }).Count
+        $remoting = ($results | Where-Object { $_.PSRemoting -eq 'Success' }).Count
+        
+        Write-Host "Total Computers: $totalCount"
+        Write-Host "Online: $online " -NoNewline
+        Write-Host "($([Math]::Round(($online/$totalCount)*100,2))%)" -ForegroundColor $(if($online -eq $totalCount){'Green'}else{'Yellow'})
+        Write-Host "PS Remoting OK: $remoting " -NoNewline
+        Write-Host "($([Math]::Round(($remoting/$totalCount)*100,2))%)" -ForegroundColor $(if($remoting -eq $totalCount){'Green'}else{'Yellow'})
+        
+        # Failed computers
+        $failed = $results | Where-Object { $_.PSRemoting -ne 'Success' }
+        if ($failed.Count -gt 0) {
+            Write-Host "`nComputers with Issues:" -ForegroundColor Red
+            $failed | Format-Table ComputerName, PingTest, WinRMPort, PSRemoting, Error -AutoSize
+        }
+        
+        # Export results
+        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $reportFile = Join-Path $OutputPath "ConnectivityTest_$timestamp.csv"
+        $results | Export-Csv -Path $reportFile -NoTypeInformation
+        
+        Write-Host "`nDetailed report saved to: " -NoNewline
+        Write-Host $reportFile -ForegroundColor Yellow
+        
+        return $results
+    }
+    catch {
+        Write-Error "Failed to test connectivity: $_"
+        throw
+    }
+}
+
+# Create output directory if needed
+if (-not (Test-Path $OutputPath)) {
+    New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+}
+
+# Run the test
+Test-BulkConnectivity -OU $TargetOU
