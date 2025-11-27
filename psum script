@@ -1,0 +1,442 @@
+#Requires -Version 5.1
+#Requires -Modules ActiveDirectory
+<#
+.SYNOPSIS
+    Remote Local Account Cleanup for Domain Workstations
+.DESCRIPTION
+    Disables old local user accounts on domain-joined workstations and optionally deletes profiles after review period
+.NOTES
+    Author: IT Administrator
+    Version: 1.0
+    Run from Domain Controller or machine with AD module and remote access
+#>
+
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$TargetOU,
+    
+    [Parameter(Mandatory=$false)]
+    [int]$InactiveDays = 30,
+    
+    [Parameter(Mandatory=$false)]
+    [int]$BatchSize = 50,
+    
+    [Parameter(Mandatory=$false)]
+    [ValidateSet('Report','Disable','DeleteProfiles')]
+    [string]$Mode = 'Report',
+    
+    [Parameter(Mandatory=$false)]
+    [int]$ProfileRetentionDays = 7,
+    
+    [Parameter(Mandatory=$false)]
+    [int]$MaxRetries = 2,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$LogPath = "C:\Scripts\Logs"
+)
+
+# Configuration
+$Script:Config = @{
+    InactiveDays = $InactiveDays
+    BatchSize = $BatchSize
+    Mode = $Mode
+    LogPath = $LogPath
+    ProfileRetentionDays = $ProfileRetentionDays
+    MaxRetries = $MaxRetries
+    ProtectedAccounts = @('GBPS', 'DefaultAccount', 'WDAGUtilityAccount')
+    SystemAccounts = @('Administrator', 'Guest', 'DefaultAccount', 'WDAGUtilityAccount')
+}
+
+# Initialize logging
+function Initialize-Logging {
+    if (-not (Test-Path $Script:Config.LogPath)) {
+        New-Item -Path $Script:Config.LogPath -ItemType Directory -Force | Out-Null
+    }
+    
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $Script:LogFile = Join-Path $Script:Config.LogPath "LocalAccountCleanup_$timestamp.log"
+    $Script:ReportFile = Join-Path $Script:Config.LogPath "AccountReport_$timestamp.csv"
+    $Script:ErrorFile = Join-Path $Script:Config.LogPath "Errors_$timestamp.log"
+    
+    Write-Log "========================================" -NoConsole
+    Write-Log "Local Account Cleanup Script Started" -NoConsole
+    Write-Log "Mode: $($Script:Config.Mode)" -NoConsole
+    Write-Log "Target OU: $TargetOU" -NoConsole
+    Write-Log "Inactive Days Threshold: $($Script:Config.InactiveDays)" -NoConsole
+    Write-Log "========================================" -NoConsole
+}
+
+# Logging function
+function Write-Log {
+    param(
+        [string]$Message,
+        [ValidateSet('Info','Warning','Error')]
+        [string]$Level = 'Info',
+        [switch]$NoConsole
+    )
+    
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $logMessage = "[$timestamp] [$Level] $Message"
+    
+    Add-Content -Path $Script:LogFile -Value $logMessage
+    
+    if (-not $NoConsole) {
+        switch ($Level) {
+            'Warning' { Write-Warning $Message }
+            'Error' { Write-Error $Message }
+            default { Write-Host $Message -ForegroundColor Cyan }
+        }
+    }
+}
+
+# Test remote connectivity
+function Test-RemoteConnection {
+    param([string]$ComputerName)
+    
+    $result = @{
+        Online = $false
+        PSRemoting = $false
+        Error = $null
+    }
+    
+    # Test basic connectivity
+    if (Test-Connection -ComputerName $ComputerName -Count 1 -Quiet) {
+        $result.Online = $true
+        
+        # Test PowerShell remoting
+        try {
+            $testSession = New-PSSession -ComputerName $ComputerName -ErrorAction Stop
+            $result.PSRemoting = $true
+            Remove-PSSession -Session $testSession
+        }
+        catch {
+            $result.Error = $_.Exception.Message
+        }
+    }
+    
+    return $result
+}
+
+# Get computers from AD
+function Get-TargetComputers {
+    param([string]$OU)
+    
+    Write-Log "Retrieving computers from OU: $OU"
+    
+    try {
+        $computers = Get-ADComputer -Filter * -SearchBase $OU -Properties Name, OperatingSystem, LastLogonDate
+        Write-Log "Found $($computers.Count) computers in target OU"
+        return $computers
+    }
+    catch {
+        Write-Log "Failed to retrieve computers from AD: $_" -Level Error
+        throw
+    }
+}
+
+# Get local user accounts from remote computer
+function Get-RemoteLocalAccounts {
+    param(
+        [string]$ComputerName,
+        [int]$RetryCount = 0
+    )
+    
+    try {
+        $accounts = Invoke-Command -ComputerName $ComputerName -ScriptBlock {
+            $inactiveDays = $using:InactiveDays
+            $cutoffDate = (Get-Date).AddDays(-$inactiveDays)
+            
+            Get-LocalUser | Where-Object {
+                $_.Enabled -eq $true -and
+                $_.Name -notmatch '^(Administrator|Guest|DefaultAccount|WDAGUtilityAccount)$'
+            } | Select-Object Name, Enabled, LastLogon, Description, SID
+        } -ErrorAction Stop
+        
+        return $accounts
+    }
+    catch {
+        if ($RetryCount -lt $Script:Config.MaxRetries) {
+            Write-Log "Retry $($RetryCount + 1) for $ComputerName" -Level Warning
+            Start-Sleep -Seconds 5
+            return Get-RemoteLocalAccounts -ComputerName $ComputerName -RetryCount ($RetryCount + 1)
+        }
+        else {
+            Write-Log "Failed to get accounts from $ComputerName after $($Script:Config.MaxRetries) retries: $_" -Level Error
+            Add-Content -Path $Script:ErrorFile -Value "[$ComputerName] $_"
+            return $null
+        }
+    }
+}
+
+# Get the most recently logged on account
+function Get-MostRecentAccount {
+    param(
+        [string]$ComputerName
+    )
+    
+    try {
+        $recentAccount = Invoke-Command -ComputerName $ComputerName -ScriptBlock {
+            Get-LocalUser | Where-Object {
+                $_.Enabled -eq $true -and
+                $_.LastLogon -ne $null
+            } | Sort-Object LastLogon -Descending | Select-Object -First 1 -ExpandProperty Name
+        } -ErrorAction Stop
+        
+        return $recentAccount
+    }
+    catch {
+        Write-Log "Could not determine most recent account on $ComputerName" -Level Warning
+        return $null
+    }
+}
+
+# Process computer accounts
+function Process-Computer {
+    param(
+        [object]$Computer,
+        [string]$Mode
+    )
+    
+    $computerName = $Computer.Name
+    Write-Log "Processing computer: $computerName"
+    
+    # Test connectivity
+    $connectionTest = Test-RemoteConnection -ComputerName $computerName
+    
+    if (-not $connectionTest.Online) {
+        Write-Log "$computerName is offline" -Level Warning
+        return [PSCustomObject]@{
+            ComputerName = $computerName
+            Status = 'Offline'
+            AccountsProcessed = 0
+            Error = 'Computer unreachable'
+        }
+    }
+    
+    if (-not $connectionTest.PSRemoting) {
+        Write-Log "$computerName - PowerShell remoting failed: $($connectionTest.Error)" -Level Error
+        return [PSCustomObject]@{
+            ComputerName = $computerName
+            Status = 'RemotingFailed'
+            AccountsProcessed = 0
+            Error = $connectionTest.Error
+        }
+    }
+    
+    # Get local accounts
+    $accounts = Get-RemoteLocalAccounts -ComputerName $computerName
+    
+    if ($null -eq $accounts) {
+        return [PSCustomObject]@{
+            ComputerName = $computerName
+            Status = 'Failed'
+            AccountsProcessed = 0
+            Error = 'Could not retrieve accounts'
+        }
+    }
+    
+    # Get most recent account
+    $mostRecentAccount = Get-MostRecentAccount -ComputerName $computerName
+    Write-Log "$computerName - Most recent account: $mostRecentAccount"
+    
+    # Filter accounts
+    $cutoffDate = (Get-Date).AddDays(-$Script:Config.InactiveDays)
+    $accountsToProcess = $accounts | Where-Object {
+        # Exclude protected accounts
+        $_.Name -notin $Script:Config.ProtectedAccounts -and
+        # Exclude most recent account
+        $_.Name -ne $mostRecentAccount -and
+        # Check last logon date
+        ($null -eq $_.LastLogon -or $_.LastLogon -lt $cutoffDate)
+    }
+    
+    $results = @()
+    
+    foreach ($account in $accountsToProcess) {
+        $accountResult = [PSCustomObject]@{
+            ComputerName = $computerName
+            AccountName = $account.Name
+            LastLogon = $account.LastLogon
+            DaysSinceLogon = if ($account.LastLogon) { ((Get-Date) - $account.LastLogon).Days } else { 'Never' }
+            Action = 'None'
+            Status = 'Identified'
+            Error = $null
+        }
+        
+        switch ($Mode) {
+            'Report' {
+                $accountResult.Action = 'Report Only'
+                $accountResult.Status = 'Reported'
+            }
+            
+            'Disable' {
+                try {
+                    Invoke-Command -ComputerName $computerName -ScriptBlock {
+                        Disable-LocalUser -Name $using:account.Name -ErrorAction Stop
+                    } -ErrorAction Stop
+                    
+                    $accountResult.Action = 'Disabled'
+                    $accountResult.Status = 'Success'
+                    Write-Log "$computerName - Disabled account: $($account.Name)"
+                }
+                catch {
+                    $accountResult.Action = 'Disable Failed'
+                    $accountResult.Status = 'Failed'
+                    $accountResult.Error = $_.Exception.Message
+                    Write-Log "$computerName - Failed to disable $($account.Name): $_" -Level Error
+                }
+            }
+            
+            'DeleteProfiles' {
+                # Only delete if disabled for more than retention period
+                $accountResult.Action = 'Profile Check'
+                
+                try {
+                    $profileInfo = Invoke-Command -ComputerName $computerName -ScriptBlock {
+                        $user = Get-LocalUser -Name $using:account.Name -ErrorAction SilentlyContinue
+                        if ($user -and -not $user.Enabled) {
+                            $profile = Get-CimInstance -ClassName Win32_UserProfile | 
+                                Where-Object { $_.LocalPath -like "*\$($using:account.Name)" }
+                            
+                            if ($profile) {
+                                return @{
+                                    HasProfile = $true
+                                    ProfilePath = $profile.LocalPath
+                                    LastUseTime = $profile.LastUseTime
+                                }
+                            }
+                        }
+                        return $null
+                    } -ErrorAction Stop
+                    
+                    if ($profileInfo -and $profileInfo.LastUseTime) {
+                        $daysSinceDisabled = ((Get-Date) - $profileInfo.LastUseTime).Days
+                        
+                        if ($daysSinceDisabled -ge $Script:Config.ProfileRetentionDays) {
+                            Invoke-Command -ComputerName $computerName -ScriptBlock {
+                                $profile = Get-CimInstance -ClassName Win32_UserProfile | 
+                                    Where-Object { $_.LocalPath -like "*\$($using:account.Name)" }
+                                if ($profile) {
+                                    Remove-CimInstance -InputObject $profile -ErrorAction Stop
+                                }
+                            } -ErrorAction Stop
+                            
+                            $accountResult.Action = 'Profile Deleted'
+                            $accountResult.Status = 'Success'
+                            Write-Log "$computerName - Deleted profile: $($account.Name)"
+                        }
+                        else {
+                            $accountResult.Action = 'Profile Retained'
+                            $accountResult.Status = "Waiting ($daysSinceDisabled/$($Script:Config.ProfileRetentionDays) days)"
+                        }
+                    }
+                }
+                catch {
+                    $accountResult.Action = 'Delete Failed'
+                    $accountResult.Status = 'Failed'
+                    $accountResult.Error = $_.Exception.Message
+                    Write-Log "$computerName - Failed to delete profile $($account.Name): $_" -Level Error
+                }
+            }
+        }
+        
+        $results += $accountResult
+    }
+    
+    # Export results
+    if ($results.Count -gt 0) {
+        $results | Export-Csv -Path $Script:ReportFile -Append -NoTypeInformation
+    }
+    
+    return [PSCustomObject]@{
+        ComputerName = $computerName
+        Status = 'Completed'
+        AccountsProcessed = $results.Count
+        Error = $null
+    }
+}
+
+# Main execution
+function Start-AccountCleanup {
+    try {
+        Initialize-Logging
+        
+        Write-Host "`n========================================" -ForegroundColor Green
+        Write-Host "LOCAL ACCOUNT CLEANUP UTILITY" -ForegroundColor Green
+        Write-Host "========================================`n" -ForegroundColor Green
+        
+        Write-Host "Mode: " -NoNewline
+        Write-Host $Script:Config.Mode -ForegroundColor Yellow
+        Write-Host "Target OU: $TargetOU"
+        Write-Host "Inactive Threshold: $($Script:Config.InactiveDays) days"
+        Write-Host "Batch Size: $($Script:Config.BatchSize)"
+        
+        if ($Script:Config.Mode -ne 'Report') {
+            Write-Host "`nWARNING: " -ForegroundColor Red -NoNewline
+            Write-Host "This will make changes to local accounts!"
+            $confirm = Read-Host "Type 'YES' to continue"
+            if ($confirm -ne 'YES') {
+                Write-Log "Operation cancelled by user"
+                return
+            }
+        }
+        
+        # Get target computers
+        $computers = Get-TargetComputers -OU $TargetOU
+        $totalComputers = $computers.Count
+        $processedCount = 0
+        $batchNumber = 1
+        
+        Write-Host "`nProcessing $totalComputers computers in batches of $($Script:Config.BatchSize)...`n"
+        
+        # Process in batches
+        for ($i = 0; $i -lt $totalComputers; $i += $Script:Config.BatchSize) {
+            $batch = $computers | Select-Object -Skip $i -First $Script:Config.BatchSize
+            
+            Write-Host "Processing Batch $batchNumber (Computers $($i+1) to $([Math]::Min($i+$Script:Config.BatchSize, $totalComputers)))..." -ForegroundColor Cyan
+            
+            foreach ($computer in $batch) {
+                $processedCount++
+                Write-Progress -Activity "Processing Computers" `
+                    -Status "Computer $processedCount of $totalComputers - $($computer.Name)" `
+                    -PercentComplete (($processedCount / $totalComputers) * 100)
+                
+                $result = Process-Computer -Computer $computer -Mode $Script:Config.Mode
+            }
+            
+            $batchNumber++
+            
+            if ($i + $Script:Config.BatchSize -lt $totalComputers) {
+                Write-Host "`nBatch complete. Press Enter to continue to next batch or Ctrl+C to stop..." -ForegroundColor Yellow
+                Read-Host
+            }
+        }
+        
+        Write-Progress -Activity "Processing Computers" -Completed
+        
+        Write-Host "`n========================================" -ForegroundColor Green
+        Write-Host "CLEANUP COMPLETE" -ForegroundColor Green
+        Write-Host "========================================`n" -ForegroundColor Green
+        
+        Write-Host "Log File: " -NoNewline
+        Write-Host $Script:LogFile -ForegroundColor Yellow
+        Write-Host "Report File: " -NoNewline
+        Write-Host $Script:ReportFile -ForegroundColor Yellow
+        
+        if (Test-Path $Script:ErrorFile) {
+            Write-Host "Error File: " -NoNewline
+            Write-Host $Script:ErrorFile -ForegroundColor Red
+        }
+        
+        Write-Log "Script execution completed"
+        
+    }
+    catch {
+        Write-Log "Fatal error: $_" -Level Error
+        throw
+    }
+}
+
+# Run the script
+Start-AccountCleanup
