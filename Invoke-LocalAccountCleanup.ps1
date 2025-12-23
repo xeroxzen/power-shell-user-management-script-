@@ -65,7 +65,11 @@ param(
     [Parameter(Mandatory=$false)]
     [ValidateRange(0, 5)]
     [int]$MaxRetries = 2,
-    
+
+    [Parameter(Mandatory=$false)]
+    [ValidateRange(1, 30)]
+    [int]$RetryDelaySeconds = 5,
+
     [Parameter(Mandatory=$false)]
     [ValidateRange(1, 50)]
     [int]$ParallelThreads = 10,
@@ -94,6 +98,7 @@ $Script:Config = @{
     LogPath = $LogPath
     ProfileRetentionDays = $ProfileRetentionDays
     MaxRetries = $MaxRetries
+    RetryDelaySeconds = $RetryDelaySeconds
     ParallelThreads = $ParallelThreads
     # FIXED: Made protected accounts configurable instead of hardcoded
     ProtectedAccounts = @('DefaultAccount', 'WDAGUtilityAccount') + $CustomProtectedAccounts
@@ -114,27 +119,34 @@ $Script:Config = @{
     - Main log file for all operations
     - CSV report file for account details
     - Error log for failures
+    Creates a mutex for thread-safe logging in parallel execution.
 .OUTPUTS
-    None. Sets script-level variables for log file paths.
+    None. Sets script-level variables for log file paths and mutex.
 #>
 function Initialize-Logging {
     if (-not (Test-Path $Script:Config.LogPath)) {
         New-Item -Path $Script:Config.LogPath -ItemType Directory -Force | Out-Null
     }
-    
+
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
     $Script:LogFile = Join-Path $Script:Config.LogPath "LocalAccountCleanup_$timestamp.log"
     $Script:ReportFile = Join-Path $Script:Config.LogPath "AccountReport_$timestamp.csv"
     $Script:ErrorFile = Join-Path $Script:Config.LogPath "Errors_$timestamp.log"
     $Script:BackupPath = Join-Path $Script:Config.LogPath "Backups_$timestamp"
-    
+
+    # Create mutex for thread-safe logging during parallel execution
+    $mutexName = "Global\LocalAccountCleanup_$timestamp"
+    $Script:LogMutex = [System.Threading.Mutex]::new($false, $mutexName)
+
     Write-Log "========================================" -NoConsole
-    Write-Log "Local Account Cleanup Script Started (v2.0 - Production Ready)" -NoConsole
+    Write-Log "Local Account Cleanup Script Started (v2.1 - Enhanced)" -NoConsole
     Write-Log "Mode: $($Script:Config.Mode)" -NoConsole
     Write-Log "Target OU: $TargetOU" -NoConsole
     Write-Log "Inactive Days Threshold: $($Script:Config.InactiveDays)" -NoConsole
     Write-Log "Parallel Threads: $($Script:Config.ParallelThreads)" -NoConsole
+    Write-Log "Retry Delay: $($Script:Config.RetryDelaySeconds) seconds" -NoConsole
     Write-Log "Protected Accounts: $($Script:Config.ProtectedAccounts -join ', ')" -NoConsole
+    Write-Log "Thread-Safe Logging: Enabled" -NoConsole
     Write-Log "========================================" -NoConsole
 }
 
@@ -144,6 +156,7 @@ function Initialize-Logging {
 .DESCRIPTION
     Timestamps and categorizes log messages, writing them to the main log file.
     Optionally displays messages on console with color coding based on severity.
+    Uses mutex for thread-safe file writes during parallel execution.
 .PARAMETER Message
     The message to log
 .PARAMETER Level
@@ -160,12 +173,25 @@ function Write-Log {
         [string]$Level = 'Info',
         [switch]$NoConsole
     )
-    
+
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $logMessage = "[$timestamp] [$Level] $Message"
-    
-    Add-Content -Path $Script:LogFile -Value $logMessage
-    
+
+    # Thread-safe file write using mutex
+    if ($Script:LogMutex) {
+        try {
+            [void]$Script:LogMutex.WaitOne()
+            Add-Content -Path $Script:LogFile -Value $logMessage -ErrorAction SilentlyContinue
+        }
+        finally {
+            [void]$Script:LogMutex.ReleaseMutex()
+        }
+    }
+    else {
+        # Fallback if mutex not initialized (shouldn't happen in normal execution)
+        Add-Content -Path $Script:LogFile -Value $logMessage -ErrorAction SilentlyContinue
+    }
+
     if (-not $NoConsole) {
         switch ($Level) {
             'Warning' { Write-Warning $Message }
@@ -178,6 +204,34 @@ function Write-Log {
 # ============================================================================
 # CONNECTIVITY FUNCTIONS
 # ============================================================================
+
+<#
+.SYNOPSIS
+    Creates a new PSSession to a remote computer with credential support.
+.DESCRIPTION
+    Centralizes session creation logic to avoid code duplication.
+    Uses credentials from script configuration if available.
+.PARAMETER ComputerName
+    Name of the computer to connect to
+.OUTPUTS
+    PSSession object
+.EXAMPLE
+    $session = New-RemoteSession -ComputerName "WS001"
+#>
+function New-RemoteSession {
+    param([string]$ComputerName)
+
+    $sessionParams = @{
+        ComputerName = $ComputerName
+        ErrorAction = 'Stop'
+    }
+
+    if ($Script:Config.Credential) {
+        $sessionParams['Credential'] = $Script:Config.Credential
+    }
+
+    return New-PSSession @sessionParams
+}
 
 <#
 .SYNOPSIS
@@ -207,18 +261,10 @@ function Test-RemoteConnection {
     # IMPROVED: Added timeout to avoid hanging on offline computers
     if (Test-Connection -ComputerName $ComputerName -Count 1 -TimeoutSeconds $Script:Config.ConnectionTimeout -Quiet) {
         $result.Online = $true
-        
+
         try {
-            # IMPROVED: Use credential if provided
-            $sessionParams = @{
-                ComputerName = $ComputerName
-                ErrorAction = 'Stop'
-            }
-            if ($Script:Config.Credential) {
-                $sessionParams['Credential'] = $Script:Config.Credential
-            }
-            
-            $testSession = New-PSSession @sessionParams
+            # Use centralized session creation function
+            $testSession = New-RemoteSession -ComputerName $ComputerName
             $result.PSRemoting = $true
             Remove-PSSession -Session $testSession
         }
@@ -233,6 +279,46 @@ function Test-RemoteConnection {
 # ============================================================================
 # ACTIVE DIRECTORY FUNCTIONS
 # ============================================================================
+
+<#
+.SYNOPSIS
+    Validates credentials by attempting an AD query.
+.DESCRIPTION
+    Tests if provided credentials are valid and have necessary AD access.
+    Prevents running entire script only to fail due to credential issues.
+.PARAMETER Credential
+    PSCredential object to validate
+.OUTPUTS
+    Boolean - True if credentials are valid, throws exception otherwise
+.EXAMPLE
+    Test-ADCredential -Credential $cred
+#>
+function Test-ADCredential {
+    param([PSCredential]$Credential)
+
+    try {
+        Write-Log "Validating credentials..." -NoConsole
+
+        # Attempt a simple AD query to verify credentials work
+        $adParams = @{
+            Filter = 'Name -like "*"'
+            ResultSetSize = 1
+            ErrorAction = 'Stop'
+        }
+
+        if ($Credential) {
+            $adParams['Credential'] = $Credential
+        }
+
+        $null = Get-ADComputer @adParams
+
+        Write-Log "Credential validation successful" -NoConsole
+        return $true
+    }
+    catch {
+        throw "Credential validation failed. Please verify your credentials have Active Directory access. Error: $_"
+    }
+}
 
 <#
 .SYNOPSIS
@@ -321,8 +407,8 @@ function Get-RemoteLocalAccounts {
     }
     catch {
         if ($RetryCount -lt $Script:Config.MaxRetries) {
-            Write-Log "Retry $($RetryCount + 1) for $ComputerName" -Level Warning
-            Start-Sleep -Seconds 5
+            Write-Log "Retry $($RetryCount + 1) for $ComputerName (waiting $($Script:Config.RetryDelaySeconds)s)" -Level Warning
+            Start-Sleep -Seconds $Script:Config.RetryDelaySeconds
             return Get-RemoteLocalAccounts -ComputerName $ComputerName -Session $Session -RetryCount ($RetryCount + 1)
         }
         else {
@@ -375,6 +461,8 @@ function Get-MostRecentAccount {
 .DESCRIPTION
     Saves account details to a JSON file for recovery purposes. Called automatically
     before disabling accounts or deleting profiles.
+    CRITICAL: In Disable/DeleteProfiles modes, backup failures will throw an error
+    to prevent destructive operations without a safety net.
 .PARAMETER ComputerName
     Name of the computer being modified
 .PARAMETER AccountName
@@ -383,6 +471,8 @@ function Get-MostRecentAccount {
     Hashtable containing account details to backup
 .OUTPUTS
     None. Writes backup file to disk.
+.NOTES
+    Throws exception in destructive modes if backup fails.
 #>
 function Backup-AccountData {
     param(
@@ -390,18 +480,54 @@ function Backup-AccountData {
         [string]$AccountName,
         [hashtable]$AccountData
     )
-    
+
     try {
         if (-not (Test-Path $Script:BackupPath)) {
-            New-Item -Path $Script:BackupPath -ItemType Directory -Force | Out-Null
+            $backupDir = New-Item -Path $Script:BackupPath -ItemType Directory -Force
+
+            # Security hardening: Set restrictive ACLs on backup directory
+            # Only allow current user and SYSTEM full access
+            try {
+                $acl = Get-Acl -Path $Script:BackupPath
+                $acl.SetAccessRuleProtection($true, $false)  # Disable inheritance
+
+                # Add current user
+                $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+                $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                    $currentUser, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow"
+                )
+                $acl.AddAccessRule($accessRule)
+
+                # Add SYSTEM
+                $systemRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                    "NT AUTHORITY\SYSTEM", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow"
+                )
+                $acl.AddAccessRule($systemRule)
+
+                Set-Acl -Path $Script:BackupPath -AclObject $acl
+                Write-Log "Backup directory secured with restrictive ACLs" -NoConsole
+            }
+            catch {
+                Write-Log "Warning: Could not set restrictive ACLs on backup directory: $_" -Level Warning
+            }
         }
-        
+
         $backupFile = Join-Path $Script:BackupPath "${ComputerName}_${AccountName}_backup.json"
         $AccountData | ConvertTo-Json | Out-File -FilePath $backupFile -Force
         Write-Log "Backup created: $backupFile" -NoConsole
     }
     catch {
-        Write-Log "Failed to create backup for $ComputerName\$AccountName: $_" -Level Warning
+        $errorMsg = "Failed to create backup for $ComputerName\$AccountName: $_"
+
+        # In destructive modes, backup failure is CRITICAL - abort the operation
+        if ($Script:Config.Mode -in @('Disable', 'DeleteProfiles')) {
+            Write-Log $errorMsg -Level Error
+            throw "CRITICAL: Backup failed - aborting destructive operation for safety. $_"
+        }
+        else {
+            # In Report mode, just warn
+            Write-Log $errorMsg -Level Warning
+        }
     }
 }
 
@@ -435,8 +561,9 @@ function Process-Computer {
         [object]$Computer,
         [string]$Mode
     )
-    
+
     $computerName = $Computer.Name
+    Write-Host "  → Processing: $computerName" -ForegroundColor DarkCyan
     Write-Log "Processing computer: $computerName"
     
     # Test connectivity
@@ -465,15 +592,8 @@ function Process-Computer {
     # CRITICAL FIX: Create ONE session and reuse it for ALL operations
     $session = $null
     try {
-        $sessionParams = @{
-            ComputerName = $computerName
-            ErrorAction = 'Stop'
-        }
-        if ($Script:Config.Credential) {
-            $sessionParams['Credential'] = $Script:Config.Credential
-        }
-        
-        $session = New-PSSession @sessionParams
+        # Use centralized session creation function
+        $session = New-RemoteSession -ComputerName $computerName
         
         # Get local accounts using the session
         $accounts = Get-RemoteLocalAccounts -ComputerName $computerName -Session $session
@@ -564,8 +684,8 @@ function Process-Computer {
                             if ($user -and -not $user.Enabled) {
                                 # CRITICAL FIX: Use exact path matching instead of wildcard
                                 # This prevents accidentally matching profiles like "Admin" matching "SuperAdmin"
+                                # FIXED: Removed hardcoded C: drive, only use SystemDrive environment variable
                                 $profile = Get-CimInstance -ClassName Win32_UserProfile | Where-Object {
-                                    $_.LocalPath -eq "C:\Users\$($using:account.Name)" -or
                                     $_.LocalPath -eq "$env:SystemDrive\Users\$($using:account.Name)"
                                 }
                                 
@@ -599,7 +719,6 @@ function Process-Computer {
                                 if ($Force -or $PSCmdlet.ShouldProcess("$computerName\$($account.Name)", "Delete Profile")) {
                                     Invoke-Command -Session $session -ScriptBlock {
                                         $profile = Get-CimInstance -ClassName Win32_UserProfile | Where-Object {
-                                            $_.LocalPath -eq "C:\Users\$($using:account.Name)" -or
                                             $_.LocalPath -eq "$env:SystemDrive\Users\$($using:account.Name)"
                                         }
                                         if ($profile) {
@@ -648,12 +767,26 @@ function Process-Computer {
         }
     }
     catch {
-        Write-Log "Error processing $computerName: $_" -Level Error
+        # Provide detailed error context for troubleshooting
+        $errorPhase = "Unknown phase"
+        if (-not $session) {
+            $errorPhase = "Session creation"
+        }
+        elseif ($null -eq $accounts) {
+            $errorPhase = "Account retrieval"
+        }
+        else {
+            $errorPhase = "Account processing"
+        }
+
+        $detailedError = "[$errorPhase] $_"
+        Write-Log "Error processing $computerName - $detailedError" -Level Error
+
         return [PSCustomObject]@{
             ComputerName = $computerName
             Status = 'Failed'
             AccountsProcessed = 0
-            Error = $_.Exception.Message
+            Error = $detailedError
         }
     }
     finally {
@@ -688,9 +821,16 @@ function Process-Computer {
 function Start-AccountCleanup {
     try {
         Initialize-Logging
-        
+
+        # Validate credentials early before processing hundreds of computers
+        if ($Script:Config.Credential) {
+            Write-Host "Validating credentials..." -ForegroundColor Cyan
+            Test-ADCredential -Credential $Script:Config.Credential
+            Write-Host "Credentials validated successfully" -ForegroundColor Green
+        }
+
         Write-Host "`n========================================" -ForegroundColor Green
-        Write-Host "LOCAL ACCOUNT CLEANUP UTILITY v2.0" -ForegroundColor Green
+        Write-Host "LOCAL ACCOUNT CLEANUP UTILITY v2.1" -ForegroundColor Green
         Write-Host "========================================`n" -ForegroundColor Green
         
         Write-Host "Mode: " -NoNewline
@@ -746,21 +886,23 @@ function Start-AccountCleanup {
                 # Import configuration into parallel runspace
                 $Config = $using:Script:Config
                 $Script:Config = $Config
-                
+
                 # Import required functions into parallel runspace
                 ${function:Write-Log} = $using:Function:Write-Log
+                ${function:New-RemoteSession} = $using:Function:New-RemoteSession
                 ${function:Test-RemoteConnection} = $using:Function:Test-RemoteConnection
                 ${function:Get-RemoteLocalAccounts} = $using:Function:Get-RemoteLocalAccounts
                 ${function:Get-MostRecentAccount} = $using:Function:Get-MostRecentAccount
                 ${function:Backup-AccountData} = $using:Function:Backup-AccountData
                 ${function:Process-Computer} = $using:Function:Process-Computer
-                
-                # Import log file paths
+
+                # Import log file paths and mutex for thread-safe logging
                 $Script:LogFile = $using:LogFile
                 $Script:ReportFile = $using:ReportFile
                 $Script:ErrorFile = $using:ErrorFile
                 $Script:BackupPath = $using:BackupPath
-                
+                $Script:LogMutex = $using:LogMutex
+
                 # Process the computer
                 Process-Computer -Computer $_ -Mode $Config.Mode
                 

@@ -1,31 +1,53 @@
-#Requires -Version 5.1
+#Requires -Version 7.0
 #Requires -Modules ActiveDirectory
 <#
 .SYNOPSIS
     Test connectivity and PowerShell remoting to target computers
 .DESCRIPTION
-    Validates that computers are online and PowerShell remoting is working before running cleanup
+    Validates that computers are online and PowerShell remoting is working before running cleanup.
+    Enhanced version with PowerShell 7 support, credential handling, and performance optimizations.
+.NOTES
+    Version: 2.0
+    Requires PowerShell 7.0+ for better performance and cross-platform compatibility
 #>
 
 param(
     [Parameter(Mandatory=$true)]
+    [ValidatePattern('^(OU|CN)=.+,DC=.+,DC=.+$')]
     [string]$TargetOU,
-    
+
     [Parameter(Mandatory=$false)]
-    [string]$OutputPath = "C:\Scripts\Logs"
+    [PSCredential]$Credential,
+
+    [Parameter(Mandatory=$false)]
+    [string]$OutputPath = "C:\Scripts\Logs",
+
+    [Parameter(Mandatory=$false)]
+    [int]$ConnectionTimeout = 5
 )
 
 function Test-BulkConnectivity {
     param([string]$OU)
-    
+
     Write-Host "`nTesting Connectivity for OU: $OU`n" -ForegroundColor Cyan
-    
+
     try {
-        $computers = Get-ADComputer -Filter * -SearchBase $OU -Properties Name
+        # Query AD with credential support
+        $adParams = @{
+            Filter = '*'
+            SearchBase = $OU
+            Properties = @('Name', 'Enabled')
+        }
+        if ($Credential) {
+            $adParams['Credential'] = $Credential
+        }
+
+        $computers = Get-ADComputer @adParams | Where-Object { $_.Enabled -eq $true }
         $totalCount = $computers.Count
-        Write-Host "Found $totalCount computers to test`n"
-        
-        $results = @()
+        Write-Host "Found $totalCount enabled computers to test`n"
+
+        # Use ArrayList for better performance
+        $results = [System.Collections.ArrayList]::new()
         $currentCount = 0
         
         foreach ($computer in $computers) {
@@ -38,32 +60,34 @@ function Test-BulkConnectivity {
                 ComputerName = $computer.Name
                 PingTest = 'Failed'
                 PSRemoting = 'Failed'
-                WinRMPort = 'Closed'
                 Error = $null
             }
-            
-            # Test Ping
-            if (Test-Connection -ComputerName $computer.Name -Count 1 -Quiet) {
+
+            # Test Ping with timeout
+            if (Test-Connection -ComputerName $computer.Name -Count 1 -TimeoutSeconds $ConnectionTimeout -Quiet) {
                 $result.PingTest = 'Success'
-                
-                # Test WinRM Port
-                $portTest = Test-NetConnection -ComputerName $computer.Name -Port 5985 -WarningAction SilentlyContinue
-                if ($portTest.TcpTestSucceeded) {
-                    $result.WinRMPort = 'Open'
-                    
-                    # Test PS Remoting
-                    try {
-                        $session = New-PSSession -ComputerName $computer.Name -ErrorAction Stop
-                        $result.PSRemoting = 'Success'
-                        Remove-PSSession -Session $session
+
+                # Test PS Remoting with credential support
+                try {
+                    $sessionParams = @{
+                        ComputerName = $computer.Name
+                        ErrorAction = 'Stop'
                     }
-                    catch {
-                        $result.Error = $_.Exception.Message
+                    if ($Credential) {
+                        $sessionParams['Credential'] = $Credential
                     }
+
+                    $session = New-PSSession @sessionParams
+                    $result.PSRemoting = 'Success'
+                    Remove-PSSession -Session $session
+                }
+                catch {
+                    $result.Error = $_.Exception.Message
                 }
             }
-            
-            $results += $result
+
+            # Use ArrayList Add method instead of += operator
+            [void]$results.Add($result)
         }
         
         Write-Progress -Activity "Testing Connectivity" -Completed
@@ -86,7 +110,7 @@ function Test-BulkConnectivity {
         $failed = $results | Where-Object { $_.PSRemoting -ne 'Success' }
         if ($failed.Count -gt 0) {
             Write-Host "`nComputers with Issues:" -ForegroundColor Red
-            $failed | Format-Table ComputerName, PingTest, WinRMPort, PSRemoting, Error -AutoSize
+            $failed | Format-Table ComputerName, PingTest, PSRemoting, Error -AutoSize
         }
         
         # Export results
@@ -103,6 +127,19 @@ function Test-BulkConnectivity {
         Write-Error "Failed to test connectivity: $_"
         throw
     }
+}
+
+# Verify PowerShell version
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    Write-Error "This script requires PowerShell 7.0 or later."
+    Write-Host "Download PowerShell 7: https://aka.ms/powershell" -ForegroundColor Yellow
+    exit 1
+}
+
+# Verify AD module
+if (-not (Get-Module -ListAvailable -Name ActiveDirectory)) {
+    Write-Error "ActiveDirectory module is not installed. Please install RSAT tools."
+    exit 1
 }
 
 # Create output directory if needed

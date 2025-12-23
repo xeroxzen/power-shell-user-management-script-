@@ -34,10 +34,10 @@ New-Item -Path "C:\Scripts" -ItemType Directory -Force
 New-Item -Path "C:\Scripts\Logs" -ItemType Directory -Force
 
 # Save the main script as:
-# C:\Scripts\LocalAccountCleanup.ps1
+# C:\Scripts\Invoke-LocalAccountCleanup.ps1
 
 # Save the connectivity test script as:
-# C:\Scripts\Test-Connectivity.ps1
+# C:\Scripts\Test-RemoteConnectivity.ps1
 ```
 
 ### Step 2: Verify PowerShell Remoting
@@ -59,7 +59,7 @@ Test-WSMan -ComputerName "COMPUTERNAME"
 
 ```powershell
 # Test connectivity to all computers in target OU
-.\Test-Connectivity.ps1 -TargetOU "OU=Workstations,DC=yourdomain,DC=com"
+.\Test-RemoteConnectivity.ps1 -TargetOU "OU=Workstations,DC=yourdomain,DC=com"
 ```
 
 **Review the output to identify:**
@@ -73,7 +73,7 @@ Test-WSMan -ComputerName "COMPUTERNAME"
 
 ```powershell
 # Generate report for a small test group first
-.\LocalAccountCleanup.ps1 `
+.\Invoke-LocalAccountCleanup.ps1 `
     -TargetOU "OU=TestWorkstations,DC=yourdomain,DC=com" `
     -InactiveDays 30 `
     -BatchSize 10 `
@@ -102,7 +102,7 @@ Example report columns:
 
 ```powershell
 # Run on 5-10 test computers first
-.\LocalAccountCleanup.ps1 `
+.\Invoke-LocalAccountCleanup.ps1 `
     -TargetOU "OU=TestWorkstations,DC=yourdomain,DC=com" `
     -InactiveDays 30 `
     -BatchSize 5 `
@@ -127,7 +127,7 @@ Example report columns:
 
 ```powershell
 # Process all 1000 computers in batches of 50
-.\LocalAccountCleanup.ps1 `
+.\Invoke-LocalAccountCleanup.ps1 `
     -TargetOU "OU=AllWorkstations,DC=yourdomain,DC=com" `
     -InactiveDays 30 `
     -BatchSize 50 `
@@ -147,7 +147,7 @@ Example report columns:
 
 ```powershell
 # After reviewing disabled accounts for 7 days, delete profiles
-.\LocalAccountCleanup.ps1 `
+.\Invoke-LocalAccountCleanup.ps1 `
     -TargetOU "OU=AllWorkstations,DC=yourdomain,DC=com" `
     -ProfileRetentionDays 7 `
     -Mode DeleteProfiles
@@ -214,15 +214,15 @@ After each run, you'll find these files in `C:\Scripts\Logs`:
 ### Example 1: First-Time Setup
 ```powershell
 # Step 1: Test 10 computers
-.\Test-Connectivity.ps1 -TargetOU "OU=Workstations,DC=company,DC=com"
+.\Test-RemoteConnectivity.ps1 -TargetOU "OU=Workstations,DC=company,DC=com"
 
 # Step 2: Generate report for those 10
-.\LocalAccountCleanup.ps1 `
+.\Invoke-LocalAccountCleanup.ps1 `
     -TargetOU "OU=Workstations,DC=company,DC=com" `
     -Mode Report
 
 # Step 3: Review CSV, then disable on those 10
-.\LocalAccountCleanup.ps1 `
+.\Invoke-LocalAccountCleanup.ps1 `
     -TargetOU "OU=Workstations,DC=company,DC=com" `
     -Mode Disable
 
@@ -234,7 +234,7 @@ After each run, you'll find these files in `C:\Scripts\Logs`:
 ### Example 2: More Aggressive Cleanup
 ```powershell
 # Find accounts inactive for 60 days
-.\LocalAccountCleanup.ps1 `
+.\Invoke-LocalAccountCleanup.ps1 `
     -TargetOU "OU=OldWorkstations,DC=company,DC=com" `
     -InactiveDays 60 `
     -Mode Report
@@ -243,7 +243,7 @@ After each run, you'll find these files in `C:\Scripts\Logs`:
 ### Example 3: Faster Processing
 ```powershell
 # Larger batches for faster completion
-.\LocalAccountCleanup.ps1 `
+.\Invoke-LocalAccountCleanup.ps1 `
     -TargetOU "OU=Workstations,DC=company,DC=com" `
     -BatchSize 100 `
     -Mode Disable
@@ -252,7 +252,7 @@ After each run, you'll find these files in `C:\Scripts\Logs`:
 ### Example 4: Extended Review Period
 ```powershell
 # Wait 14 days before deleting profiles
-.\LocalAccountCleanup.ps1 `
+.\Invoke-LocalAccountCleanup.ps1 `
     -TargetOU "OU=Workstations,DC=company,DC=com" `
     -ProfileRetentionDays 14 `
     -Mode DeleteProfiles
