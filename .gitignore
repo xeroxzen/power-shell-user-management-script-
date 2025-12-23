@@ -1,0 +1,381 @@
+# ============================================================================
+# PowerShell Local Account Cleanup - .gitignore
+# ============================================================================
+
+# ============================================================================
+# Testing and Development Files
+# ============================================================================
+
+# PowerShell installation packages (from testing setup)
+*.deb
+*.rpm
+*.msi
+*.pkg
+
+# Demo and test files
+demo-*.ps1
+test-*.ps1
+
+# ============================================================================
+# Script Output and Logs
+# ============================================================================
+
+# Log directories
+Logs/
+logs/
+C:\Scripts\Logs/
+
+# Log files
+*.log
+*.txt.log
+*_*.log
+LocalAccountCleanup_*.log
+AccountReport_*.csv
+Errors_*.log
+ConnectivityTest_*.csv
+
+# Backup directories
+Backups/
+Backups_*/
+*_backup/
+
+# Report files (generated at runtime)
+AccountReport_*.csv
+*Report*.csv
+
+# ============================================================================
+# PowerShell Specific
+# ============================================================================
+
+# PowerShell module cache
+*.psm1.cache
+
+# PowerShell session state
+*.ps1xml
+
+# PowerShell debugging
+*.pdb
+
+# PSScriptAnalyzer settings (if custom)
+PSScriptAnalyzerSettings.psd1.user
+
+# ============================================================================
+# Operating System Files
+# ============================================================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.directory
+.Trash-*
+.nfs*
+
+# ============================================================================
+# IDE and Editor Files
+# ============================================================================
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+.history/
+
+# JetBrains IDEs (IntelliJ, PyCharm, etc.)
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+.idea_modules/
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+[._]sw[a-p]
+Session.vim
+Sessionx.vim
+.netrwhist
+tags
+[._]*.un~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Atom
+.atom/
+
+# Eclipse
+.project
+.classpath
+.settings/
+.metadata/
+
+# ============================================================================
+# Temporary Files
+# ============================================================================
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*.bak
+*.old
+*.orig
+*~
+
+# Patch files
+*.patch
+*.diff
+*.rej
+
+# ============================================================================
+# Credentials and Secrets
+# ============================================================================
+
+# Credential files
+credentials.json
+*.credentials
+secrets.json
+*.secret
+*.key
+*.pem
+*.pfx
+*.p12
+
+# Environment files
+.env
+.env.local
+.env.*.local
+*.env
+
+# ============================================================================
+# Build and Distribution
+# ============================================================================
+
+# Build outputs
+dist/
+build/
+*.zip
+*.tar.gz
+*.7z
+
+# Package files
+*.nupkg
+*.snupkg
+
+# ============================================================================
+# Version Control
+# ============================================================================
+
+# Git merge files
+*.orig
+*.BACKUP.*
+*.BASE.*
+*.LOCAL.*
+*.REMOTE.*
+
+# SVN
+.svn/
+
+# Mercurial
+.hg/
+.hgignore
+.hgtags
+
+# ============================================================================
+# Documentation Build Artifacts
+# ============================================================================
+
+# Sphinx documentation
+docs/_build/
+docs/_static/
+docs/_templates/
+
+# MkDocs
+site/
+
+# ============================================================================
+# Testing Artifacts
+# ============================================================================
+
+# Pester test results
+TestResults/
+TestResults.xml
+coverage.xml
+*.Tests.ps1.coverage.xml
+
+# Code coverage
+coverage/
+.coverage
+htmlcov/
+
+# ============================================================================
+# Local Development
+# ============================================================================
+
+# Local configuration
+local.settings.json
+appsettings.local.json
+*.local.ps1
+
+# Scratch files
+scratch/
+playground/
+sandbox/
+notes.txt
+TODO.local.md
+
+# User-specific files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# ============================================================================
+# Cloud and Container
+# ============================================================================
+
+# Docker
+.dockerignore
+docker-compose.override.yml
+
+# Kubernetes
+*.kubeconfig
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+
+# ============================================================================
+# Database
+# ============================================================================
+
+# SQLite
+*.db
+*.sqlite
+*.sqlite3
+
+# ============================================================================
+# Compiled and Binary Files
+# ============================================================================
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Executables
+*.exe
+*.out
+*.app
+
+# ============================================================================
+# Node.js (if using npm for any tooling)
+# ============================================================================
+
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+
+# ============================================================================
+# Python (if using Python tooling)
+# ============================================================================
+
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# ============================================================================
+# Project Specific Exclusions
+# ============================================================================
+
+# Exclude test credentials or connection strings
+test-credentials.ps1
+test-config.json
+
+# Exclude large test data sets
+testdata/
+sample-data/
+
+# Exclude generated documentation
+generated-docs/
+
+# Keep but ignore local examples
+examples/local/
+examples/*.local.ps1
+
+# ============================================================================
+# IMPORTANT: Files to KEEP in Repository
+# ============================================================================
+# The following should NOT be ignored (explicitly tracked):
+# - Invoke-LocalAccountCleanup.ps1
+# - Test-RemoteConnectivity.ps1
+# - Show-Banner.ps1
+# - Validate-Scripts.ps1
+# - usage_guide.md
+# - TESTING.md
+# - QUICKSTART-TESTING.md
+# - BANNER-README.md
+# - banner.txt
+# - Tests/*.Tests.ps1
+# - README.md (if exists)
+# - LICENSE (if exists)
+# ============================================================================

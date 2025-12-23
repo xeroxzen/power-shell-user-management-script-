@@ -60,13 +60,9 @@ function Show-Banner {
     Write-Host "                    " -NoNewline
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
     Write-Host ""
-    Write-Host "    🎯 " -NoNewline -ForegroundColor Green
     Write-Host "Automated Local User Account Management" -ForegroundColor White
-    Write-Host "    🖥️  " -NoNewline -ForegroundColor Cyan
     Write-Host "Windows Domain Environments - AD Integration" -ForegroundColor White
-    Write-Host "    ⚡ " -NoNewline -ForegroundColor Yellow
     Write-Host "Thread-Safe Parallel Processing" -ForegroundColor White
-    Write-Host "    🔒 " -NoNewline -ForegroundColor Magenta
     Write-Host "Security Hardened - Backup Protected" -ForegroundColor White
     Write-Host ""
     Write-Host "                    " -NoNewline
@@ -75,7 +71,7 @@ function Show-Banner {
 
     if (-not $SkipTips) {
         # Tips and quick start
-        Write-Host "  📋 Quick Start Commands:" -ForegroundColor Cyan
+        Write-Host "   Quick Start Commands:" -ForegroundColor Cyan
         Write-Host ""
         Write-Host "    1. Test Connectivity First:" -ForegroundColor Yellow
         Write-Host "       " -NoNewline
@@ -96,7 +92,7 @@ function Show-Banner {
         Write-Host "                    " -NoNewline
         Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
         Write-Host ""
-        Write-Host "  💡 Tips:" -ForegroundColor Cyan
+        Write-Host "   Tips:" -ForegroundColor Cyan
         Write-Host "     • " -NoNewline -ForegroundColor Green
         Write-Host "Always run in Report mode first to preview changes" -ForegroundColor White
         Write-Host "     • " -NoNewline -ForegroundColor Green
@@ -111,7 +107,7 @@ function Show-Banner {
         Write-Host "                    " -NoNewline
         Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
         Write-Host ""
-        Write-Host "  📚 Documentation:" -ForegroundColor Cyan
+        Write-Host "   Documentation:" -ForegroundColor Cyan
         Write-Host "     • " -NoNewline -ForegroundColor Magenta
         Write-Host "Get-Help ./Invoke-LocalAccountCleanup.ps1 -Full" -ForegroundColor Gray
         Write-Host "     • " -NoNewline -ForegroundColor Magenta
@@ -122,14 +118,14 @@ function Show-Banner {
         Write-Host "                    " -NoNewline
         Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
         Write-Host ""
-        Write-Host "  ⚡ Key Features (v2.1):" -ForegroundColor Cyan
-        Write-Host "     ✅ Thread-safe parallel processing (10+ computers simultaneously)" -ForegroundColor Green
-        Write-Host "     ✅ Automatic backup creation before destructive operations" -ForegroundColor Green
-        Write-Host "     ✅ Early credential validation (fail-fast)" -ForegroundColor Green
-        Write-Host "     ✅ Configurable retry delays and parallel threads" -ForegroundColor Green
-        Write-Host "     ✅ Security hardening with restrictive ACLs on backups" -ForegroundColor Green
-        Write-Host "     ✅ Enhanced error context for faster troubleshooting" -ForegroundColor Green
-        Write-Host "     ✅ Real-time progress indicators" -ForegroundColor Green
+        Write-Host "   Key Features (v2.1):" -ForegroundColor Cyan
+        Write-Host "      Thread-safe parallel processing (10+ computers simultaneously)" -ForegroundColor Green
+        Write-Host "      Automatic backup creation before destructive operations" -ForegroundColor Green
+        Write-Host "      Early credential validation (fail-fast)" -ForegroundColor Green
+        Write-Host "      Configurable retry delays and parallel threads" -ForegroundColor Green
+        Write-Host "      Security hardening with restrictive ACLs on backups" -ForegroundColor Green
+        Write-Host "      Enhanced error context for faster troubleshooting" -ForegroundColor Green
+        Write-Host "      Real-time progress indicators" -ForegroundColor Green
         Write-Host ""
     }
 
@@ -196,8 +192,8 @@ function Show-MenuBanner {
     Write-Host "  ┌─────────────────────────────────────────────────────────────────┐" -ForegroundColor Blue
     Write-Host "  │                                                                 │" -ForegroundColor Blue
     Write-Host "  │       " -NoNewline -ForegroundColor Blue
-    Write-Host "🔧 LOCAL ACCOUNT CLEANUP TOOLKIT 🔧" -NoNewline -ForegroundColor Cyan
-    Write-Host "               │" -ForegroundColor Blue
+    Write-Host "LOCAL ACCOUNT CLEANUP TOOLKIT" -NoNewline -ForegroundColor Cyan
+    Write-Host "                     │" -ForegroundColor Blue
     Write-Host "  │                                                                 │" -ForegroundColor Blue
     Write-Host "  └─────────────────────────────────────────────────────────────────┘" -ForegroundColor Blue
     Write-Host ""
